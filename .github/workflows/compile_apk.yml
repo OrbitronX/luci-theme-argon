@@ -151,11 +151,10 @@ jobs:
           echo "TAG_VERSION=$TAG_VERSION" >> $GITHUB_ENV
 
       - name: Upload Argon Theme Apk To Release
-        uses: softprops/action-gh-release@v2
+        uses: softprops/action-gh-release@v1
         if: steps.create_tag.outputs.tag_created == 'true'
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         with:
           tag_name: ${{env.TAG_VERSION}}
-          files: base/luci-theme*.apk
-          fail_on_unmatched_files: true
+          files: ${{ env.FIRMWARE }}/base/luci-theme*.*
