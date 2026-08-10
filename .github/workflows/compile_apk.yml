@@ -138,17 +138,12 @@ jobs:
         run: |
           TAG_VERSION="${{needs.job_check.outputs.argon_version}}"
           
-          # Verificar si el tag existe
           if git rev-parse "$TAG_VERSION" >/dev/null 2>&1; then
             echo "Tag already exists, skipping creation"
           else
             git config user.name "github-actions[bot]"
             git config user.email "github-actions[bot]@users.noreply.github.com"
-
-            # Crear el tag localmente
             git tag -a "$TAG_VERSION" -m "Release $TAG_VERSION for OpenWrt Argon"
-            
-            # Empujar el tag al remoto
             git push origin "$TAG_VERSION"
           fi
           
@@ -156,11 +151,11 @@ jobs:
           echo "TAG_VERSION=$TAG_VERSION" >> $GITHUB_ENV
 
       - name: Upload Argon Theme Apk To Release
-        uses: softprops/action-gh-release@v3
+        uses: softprops/action-gh-release@v2
         if: steps.create_tag.outputs.tag_created == 'true'
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         with:
           tag_name: ${{env.TAG_VERSION}}
-          files: /base/luci-theme*.apk
+          files: base/luci-theme*.apk
           fail_on_unmatched_files: true
