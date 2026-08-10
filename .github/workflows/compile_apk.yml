@@ -162,5 +162,5 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         with:
           tag_name: ${{env.TAG_VERSION}}
-          files: base/luci-theme*.apk
+          files: /base/luci-theme*.apk
           fail_on_unmatched_files: true
