@@ -122,16 +122,11 @@ jobs:
           cd ${{ env.SDK_PATH }}
           echo "Compiling with $(nproc) threads..."
           make package/luci-theme-argon/{clean,compile} -j$(nproc)
-          
-          if [ -d "bin/packages/x86_64/base" ]; then
-            cp -r bin/packages/x86_64/base ../
-            echo "status=success" >> $GITHUB_OUTPUT
-            echo "FIRMWARE=$PWD" >> $GITHUB_ENV
-          else
-            echo "status=failed" >> $GITHUB_OUTPUT
-            echo "FIRMWARE=" >> $GITHUB_ENV
-          fi
+          mv bin/packages/x86_64/base/ ../
           rm -f .config .config.old
+          cd ..
+          echo "status=success" >> $GITHUB_OUTPUT
+          echo "FIRMWARE=$PWD" >> $GITHUB_ENV
 
       - name: Create and Push Tag
         id: create_tag
@@ -151,10 +146,10 @@ jobs:
           echo "TAG_VERSION=$TAG_VERSION" >> $GITHUB_ENV
 
       - name: Upload Argon Theme Apk To Release
-        uses: softprops/action-gh-release@v1
-        if: steps.create_tag.outputs.tag_created == 'true'
+        uses: softprops/action-gh-release@v3
+        if: steps.compile.outputs.status == 'success'
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         with:
-          tag_name: ${{env.TAG_VERSION}}
+          tag_name: ${{needs.job_check.outputs.argon_version}}
           files: ${{ env.FIRMWARE }}/base/luci-theme*.*
