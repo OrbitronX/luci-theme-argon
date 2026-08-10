@@ -1,0 +1,166 @@
+name: "Compile Apk"
+on:
+  repository_dispatch:
+  workflow_dispatch:
+    inputs:
+      ssh:
+        description: "SSH connection to Actions"
+        required: false
+        default: "false"
+  push:
+    branches:
+      - "master"
+    paths:
+      - "Makefile"
+      - ".github/workflows/compile_apk.yml"
+env:
+  TZ: Asia/Shanghai
+  SDK_URL: https://downloads.openwrt.org/snapshots/targets/x86/64/openwrt-sdk-x86-64_gcc-14.4.0_musl.Linux-x86_64.tar.zst
+  SDK_PATH: sdk
+
+jobs:
+  job_check:
+    if: github.repository == ${{ github.repository }}
+    name: Check Version
+    runs-on: ubuntu-latest
+    outputs:
+      argon_version: ${{ steps.check_version.outputs.latest_version }}
+      has_update: ${{ steps.check_version.outputs.has_update }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+          ref: "master"
+
+      - name: Check version
+        id: check_version
+        run: |
+          set -o pipefail
+          MAKEFILE_PATH="Makefile"
+          
+          latest_version=$(grep -oP 'PKG_VERSION:=\K.*' "$MAKEFILE_PATH" | sed 's/^/v/')
+          latest_release=$(curl -s https://api.github.com/repos/${{ github.repository }}/releases/latest | jq -r '.tag_name // "v0.0.0"')
+          if [ "$latest_version" != "$latest_release" ]; then
+            has_update="true"
+          else
+            has_update="false"
+          fi
+          
+          echo "latest_version=${latest_version}" >> $GITHUB_OUTPUT
+          echo "has_update=${has_update}" >> $GITHUB_OUTPUT
+          echo "latest_version: ${latest_version}"
+          echo "latest_release: ${latest_release}"
+          echo "has_update: ${has_update}"
+
+  job_build_argon:
+    name: Build Argon Theme
+    needs: job_check
+    if: needs.job_check.outputs.has_update == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+        with:
+          fetch-depth: 1
+          ref: "master"
+
+      - name: Install Packages
+        run: |
+          sudo -E apt-get -qq update
+          sudo -E apt-get -qq install zstd build-essential clang flex bison g++ gawk gcc-multilib g++-multilib gettext git libncurses-dev libssl-dev python3-setuptools rsync unzip zlib1g-dev file wget
+          sudo -E apt-get -qq autoremove --purge
+          sudo -E apt-get -qq clean
+
+      - name: Cache OpenWrt SDK
+        id: cache-sdk
+        uses: actions/cache@v5
+        with:
+          path: ${{ env.SDK_PATH }}
+          key: openwrt-sdk-snapshot-x86-64-${{ github.sha }}
+          restore-keys: |
+            openwrt-sdk-snapshot-x86-64-
+
+      - name: Initialization Environment
+        if: steps.cache-sdk.outputs.cache-hit != 'true'
+        run: |
+          echo "Downloading SDK..."
+          curl -L -o sdk.tar.zst ${{ env.SDK_URL }}
+          mkdir ${{ env.SDK_PATH }}
+          tar --zstd -xvf sdk.tar.zst -C ${{ env.SDK_PATH }} --strip-components=1
+          rm sdk.tar.zst
+          echo "SDK downloaded successfully"
+
+      - name: Setup Feeds
+        run: |
+          cd ${{ env.SDK_PATH }}
+          cat > feeds.conf << EOF
+          src-git base https://github.com/openwrt/openwrt.git;main
+          src-git-full packages https://github.com/openwrt/packages.git;master
+          src-git-full luci https://github.com/openwrt/luci.git;master
+          src-git-full routing https://git.openwrt.org/feed/routing.git;master
+          EOF
+          git clone -b master https://github.com/${{ github.repository }}.git package/downloads/luci-theme-argon
+          ./scripts/feeds update -a
+          echo "CONFIG_PACKAGE_luci-theme-argon=m" > .config
+          ./scripts/feeds install -d n luci-theme-argon
+          make download -j$(nproc)
+
+      - name: Configure Argon Theme
+        run: |
+          cd ${{ env.SDK_PATH }}
+          echo "CONFIG_PACKAGE_luci-theme-argon=m" > .config
+          echo "CONFIG_ALL=n" >> .config
+          echo "CONFIG_ALL_NONSHARED=n" >> .config
+          echo "CONFIG_ALL_KMODS=n" >> .config
+          echo "CONFIG_AUTOREMOVE=n" >> .config
+          make defconfig
+
+      - name: Compile Argon Theme
+        id: compile
+        run: |
+          cd ${{ env.SDK_PATH }}
+          echo "Compiling with $(nproc) threads..."
+          make package/luci-theme-argon/{clean,compile} -j$(nproc)
+          
+          if [ -d "bin/packages/x86_64/base" ]; then
+            cp -r bin/packages/x86_64/base ../
+            echo "status=success" >> $GITHUB_OUTPUT
+            echo "FIRMWARE=$PWD" >> $GITHUB_ENV
+          else
+            echo "status=failed" >> $GITHUB_OUTPUT
+            echo "FIRMWARE=" >> $GITHUB_ENV
+          fi
+          rm -f .config .config.old
+
+      - name: Create and Push Tag
+        id: create_tag
+        run: |
+          TAG_VERSION="${{needs.job_check.outputs.argon_version}}"
+          
+          # Verificar si el tag existe
+          if git rev-parse "$TAG_VERSION" >/dev/null 2>&1; then
+            echo "Tag already exists, skipping creation"
+          else
+            git config user.name "github-actions[bot]"
+            git config user.email "github-actions[bot]@users.noreply.github.com"
+
+            # Crear el tag localmente
+            git tag -a "$TAG_VERSION" -m "Release $TAG_VERSION for OpenWrt Argon"
+            
+            # Empujar el tag al remoto
+            git push origin "$TAG_VERSION"
+          fi
+          
+          echo "tag_created=true" >> $GITHUB_OUTPUT
+          echo "TAG_VERSION=$TAG_VERSION" >> $GITHUB_ENV
+
+      - name: Upload Argon Theme Apk To Release
+        uses: softprops/action-gh-release@v3
+        if: steps.create_tag.outputs.tag_created == 'true'
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          tag_name: ${{env.TAG_VERSION}}
+          files: base/luci-theme*.apk
+          fail_on_unmatched_files: true
